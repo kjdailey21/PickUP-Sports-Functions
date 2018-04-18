@@ -9,13 +9,15 @@ const ref = admin.database().ref();
 exports.createUserProfile = functions.auth.user().onCreate((user) => {
 
     console.log('This function is firing now');
+    console.log('User: ', user);
+    console.log('UID: ', user.uid);
 
     const uid = user.uid;
     const email = user.email;
     const photo = user.photoURL || 'https://firebasestorage.googleapis.com/v0/b/pickupsports-185012.appspot.com/o/profile_images%2Fplaceholders%2Fprofile_placeholder.png?alt=media&token=3ffcfe32-83dc-4e3b-b2cb-9a166dd0a754';
     let facebookId: string;
 
-    if (!user.providerData) {
+    if (user.providerData.length == 0 || user.providerData == []) {
         console.log('Not Facebook User');
         facebookId = 'not_facebook';
     } else {
