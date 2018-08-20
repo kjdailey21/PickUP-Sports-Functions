@@ -1,13 +1,72 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
+const nodemailer = require('nodemailer');
 
 admin.initializeApp(functions.config().firebase);
 
 // FIREBASE REALTIME DB REFERENCE
-const ref = admin.database().ref();
+// const ref = admin.database().ref();
 
 // FIRESTORE BETTER DB REFERENCE
 const db = admin.firestore();
+const kevinRef = db.collection('profiles').doc('bzGK0op8S4WuL5YliFRHcdBlKKr2');
+const chrisRef = db.collection('profiles').doc('ASUUYgf28Wc9qk1UtIx0i44hVrZ2');
+
+
+const gmailEmail = functions.config().gmail.email;
+const gmailPassword = functions.config().gmail.password;
+const mailTransport = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: gmailEmail,
+        pass: gmailPassword,
+    },
+});
+
+const APP_NAME = 'PickUP Sports';
+
+exports.sendWelcomeEmail = functions.auth.user().onCreate((user) => {
+// [END onCreateTrigger]
+    // [START eventAttributes]
+    const email = user.email; // The email of the user.
+    const displayName = user.displayName; // The display name of the user.
+    // [END eventAttributes]
+
+    return sendWelcomeEmail(email, displayName);
+});
+
+exports.sendByeEmail = functions.auth.user().onDelete((user) => {
+// [END onDeleteTrigger]
+    const email = user.email;
+    const displayName = user.displayName;
+
+    return sendGoodbyEmail(email, displayName);
+});
+
+function sendWelcomeEmail(email, displayName) {
+    const mailOptions = {
+        from: `${APP_NAME} <chris@pickupsports.today>`,
+        to: email,
+        subject: `\`Welcome to ${APP_NAME}!\`;`,
+        text: `Hey ${displayName || ''}! Welcome to ${APP_NAME}. I hope you will enjoy our service.`
+    };
+    return mailTransport.sendMail(mailOptions).then(() => {
+        console.log('New welcome email sent to:', email);
+    });
+}
+
+function sendGoodbyEmail(email, displayName) {
+    const mailOptions = {
+        from: `${APP_NAME} <chris@pickupsports.today>`,
+        to: email,
+        subject: `Bye!`,
+        text: `Hey ${displayName || ''}!, We confirm that we have deleted your ${APP_NAME} account.`
+    };
+    return mailTransport.sendMail(mailOptions).then(() => {
+        console.log('Account deletion confirmation email sent to:', email);
+    });
+}
+
 
 // CREATE EXPRESS LAYER IN GOOGLE FUNCTIONS
 const express = require('express');
@@ -28,64 +87,6 @@ app.get('/:id', (req, res) => {
 // PROFILE SPECIFIC FUNCTIONS //
 
 ////////////////////////////////
-
-
-// CREATE OR ENABLE NEW / EXISTING ACCOUNTS (FIREBASE)
-exports.createUserProfile = functions.auth.user().onCreate((user) => {
-
-    console.log('This function is firing now');
-    console.log('User: ', user);
-    console.log('UID: ', user.uid);
-
-    const uid = user.uid;
-    const email = user.email;
-    const photo = user.photoURL || 'https://firebasestorage.googleapis.com/v0/b/pickupsports-185012.appspot.com/o/profile_images%2Fplaceholders%2Fprofile_placeholder.png?alt=media&token=3ffcfe32-83dc-4e3b-b2cb-9a166dd0a754';
-    let facebookId: string;
-
-    if (user.providerData.length === 0 || user.providerData === []) {
-        console.log('Not Facebook User');
-        facebookId = 'not_facebook';
-    } else {
-        console.log('Facebook User', user.providerData[0].uid);
-        facebookId = user.providerData[0].uid;
-    }
-
-
-    const newUserRef = ref.child(`/profiles/${uid}`);
-
-
-    console.log('This user does not exist yet.  Creating User!');
-    return newUserRef.set({
-        email: email,
-        photo: photo,
-        createdDate: new Date(),
-        isActive: true,
-        alertMethod: 'push',
-        bio: ' ',
-        distance: 20,
-        facebookId: facebookId,
-        firstName: ' ',
-        lastName: ' ',
-        mapView: true,
-        readyToPlay: false,
-        roles: {
-            admin: false,
-            user: true,
-            sponsor: false
-        },
-        aboutMeComplete: false,
-        friendsComplete: false,
-        homeComplete: false,
-        sportsComplete: false,
-        tutorialComplete: false,
-        profileComplete: false,
-        location: {
-            lat: 0,
-            lng: 0
-        }
-    })
-
-});
 
 
 // CREATE OR ENABLE NEW / EXISTING ACCOUNTS (FIRESTORE)
@@ -127,6 +128,8 @@ exports.createUserFirestoreProfile = functions.auth.user().onCreate((user) => {
         mapView: true,
         friends_count: 0,
         game_count: 0,
+        notifications_count: 0,
+        unread_notifications: 0,
         readyToPlay: false,
         roles: {
             admin: false,
@@ -153,12 +156,23 @@ exports.createUserFirestoreProfile = functions.auth.user().onCreate((user) => {
             return newUserRef.collection('friends_list').doc().set({
                 friendId: 'ASUUYgf28Wc9qk1UtIx0i44hVrZ2',
                 accepted: true
+            }).then(() => {
+                //ADD NEW USER TO CHRIS'S FRIENDS
+                return chrisRef.collection('friends_list').doc().set({
+                    friendId: newUserRef.id,
+                    accepted: true
+                }).then(() => {
+                    //ADD NEW USER TO KEVIN'S FRIENDS
+                    return kevinRef.collection('friends_list').doc().set({
+                        friendId: newUserRef.id,
+                        accepted: true
+                    })
+                })
             })
         })
     });
 
 });
-
 
 // UPDATE THE COUNT OF FRIENDS ON PROFILE
 exports.incrementFriendsCount = functions.firestore.document('profiles/{profileId}/friends_list/{friendId}').onCreate((change, context) => {
@@ -265,7 +279,35 @@ exports.decrementFriendsCount = functions.firestore.document('profiles/{profileI
 
     });
 
+exports.updateIndex = functions.firestore
+    .document('profiles/{profileId}')
+    .onUpdate((change, context) => {
 
+        const profileId = context.params.profileId;
+        const profile = change.after.data();
+
+        const searchableIndex = createIndex(profile.email);
+
+        const indexedProfile = { ...profile, searchableIndex };
+
+        return db.collection('profiles').doc(profileId).set(indexedProfile, { merge: true })
+
+    });
+
+function createIndex(email) {
+    const arr = email.toLowerCase().split('');
+    const searchableIndex = {};
+
+    let prevKey = '';
+
+    for (const char of arr) {
+        const key = prevKey + char;
+        searchableIndex[key] = true;
+        prevKey = key
+    }
+
+    return searchableIndex
+}
 
 
 ////////////////////////////////
